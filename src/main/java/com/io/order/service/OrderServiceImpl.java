@@ -2,6 +2,11 @@ package com.io.order.service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -16,6 +21,16 @@ public class OrderServiceImpl implements OrderService {
 
     @Autowired
     private OrderRepo orderRepo;
+
+    private final ThreadPoolExecutor executorService;
+
+    
+
+    public OrderServiceImpl() {
+        this.executorService = new ThreadPoolExecutor(
+            2, 2, 60L, TimeUnit.SECONDS, new LinkedBlockingQueue<>()
+        );
+    }
 
     @Override
     public ResponseOrder genrateOneOrder(Long p_id) {
@@ -34,28 +49,33 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     public List<ResponseOrder> genrateOrder(List<Long> p_id) {
-        List<OrderDetails> orderDetailsList = new ArrayList<>();
+        List<Future<OrderDetails>> futureList = new ArrayList<>();
         List<ResponseOrder> responseOrders = new ArrayList<>();
-        p_id.parallelStream().forEach(id->{
-            OrderDetails orderDetails = OrderDetails.builder()
-            .p_Id(id)
-            .status(Status.GENRATED.toString())
-            .message("order genrated with product Id: "+ p_id +" waiting for payment.")
-            .build();
-            OrderDetails save = orderRepo.save(orderDetails);
-            orderDetailsList.add(save);
-        });
-        orderDetailsList.forEach(order->{
-            ResponseOrder responseOrder = ResponseOrder.builder()
-            .order_id(order.getOrder_id())
-            .message(order.getMessage())
-            .status(Status.valueOf(order.getStatus()))
-            .build();
-            responseOrders.add(responseOrder);
-        });
+        for (Long id : p_id) {
+            futureList.add(executorService.submit(() -> {
+                OrderDetails orderDetails = OrderDetails.builder()
+                    .p_Id(id)
+                    .status(Status.GENRATED.toString())
+                    .message("Order generated with product Id: " + id + " waiting for payment.")
+                    .build();
+                return orderRepo.save(orderDetails);
+            }));
+        }
+        for (Future<OrderDetails> future : futureList) {
+            try {
+                OrderDetails orderDetails = future.get();  // Wait for the task to complete 
+                responseOrders.add(ResponseOrder.builder()
+                .order_id(orderDetails.getOrder_id())
+                .message(orderDetails.getMessage())
+                .status(Status.valueOf(orderDetails.getStatus()))
+                .build());
+            } catch (InterruptedException | ExecutionException e) {
+                // Handle exceptions
+                e.printStackTrace();
+            }
+        }
         return responseOrders;
     }
-
     @Override
     public ResponseOrder showOrder(Long order_id) {
         // TODO Auto-generated method stub
